@@ -3,13 +3,15 @@ package main
 import (
 	"bufio"
 	"fmt"
-	"math"
+	"io"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/bpicori/1brc/utils"
 )
 
 type Data struct {
@@ -18,133 +20,144 @@ type Data struct {
 	mean float64
 }
 
+const CHUNK_SIZE = 16 * 1024 * 1024 // 1MB
+const WORKER_COUNT = 8
+const FILE = "./measurements.txt"
+
 var count atomic.Uint64
 var mapMutex sync.Mutex
 
 var CityMap = make(map[string]Data)
 
-func hashCity(city string, mod int) int {
-	hash := 0
+func processWorker(linesRaw string) {
+	mapMutex.Lock()
+	defer mapMutex.Unlock()
 
-	for i := 0; i < len(city); i++ {
-		hash = (hash*31 + int(city[i])) % mod
-	}
-	return hash
+	lines := strings.Split(linesRaw, "\n")
 
-}
-
-func processWorker(line string) {
-	// mapMutex.Lock()
-	// defer mapMutex.Unlock()
-
-	res := strings.Split(line, ";")
-	city := res[0]
-	temperature, err := strconv.ParseFloat(res[1], 64)
-	if err != nil {
-		panic(err)
-	}
-
-	if _, ok := CityMap[city]; !ok {
-		// CityMap[city] = Data{min: temperature, max: temperature, mean: temperature}
-	} else {
-		// update the data
-		data := CityMap[city]
-		if temperature < data.min {
-			data.min = temperature
+	for _, line := range lines {
+		if line == "" {
+			continue
 		}
-		if temperature > data.max {
-			data.max = temperature
+		res := strings.Split(line, ";")
+		city := res[0]
+		temperature, err := strconv.ParseFloat(res[1], 64)
+		if err != nil {
+			panic(err)
 		}
-		data.mean = (data.mean + temperature) / 2
-		// CityMap[city] = data
-	}
-	count.Add(1)
-}
 
-func humanizeNumber(num float64) string {
-	units := []string{"", "K", "M", "B", "T", "P", "E"}
-	if num < 1000 {
-		return fmt.Sprintf("%.0f", num)
-	}
-	exp := int(math.Log(num) / math.Log(1000))
-	if exp > len(units)-1 {
-		return strconv.FormatFloat(num, 'f', -1, 64)
-	}
-	return fmt.Sprintf("%.1f%s", num/math.Pow(1000, float64(exp)), units[exp])
-}
-
-func humanizeTime(duration time.Duration) string {
-	if duration < time.Minute {
-		// Less than a minute
-		return fmt.Sprintf("%d seconds", int(duration.Seconds()))
-	} else if duration < time.Hour {
-		// Less than an hour
-		return fmt.Sprintf("%d minutes", int(duration.Minutes()))
-	} else if duration < time.Hour*24 {
-		// Less than a day
-		hours := duration / time.Hour
-		duration -= hours * time.Hour
-		minutes := duration / time.Minute
-		return fmt.Sprintf("%d hours %d minutes", hours, minutes)
-	} else {
-		// Days or more
-		days := duration / (time.Hour * 24)
-		duration -= days * (time.Hour * 24)
-		hours := duration / time.Hour
-		return fmt.Sprintf("%d days %d hours", days, hours)
+		if _, ok := CityMap[city]; !ok {
+			CityMap[city] = Data{min: temperature, max: temperature, mean: temperature}
+		} else {
+			data := CityMap[city]
+			if temperature < data.min {
+				data.min = temperature
+			}
+			if temperature > data.max {
+				data.max = temperature
+			}
+			data.mean = (data.mean + temperature) / 2
+			CityMap[city] = data
+		}
+		count.Add(1)
 	}
 }
 
-func main() {
-	file, err := os.Open("./measurements.txt")
+func monitor() {
+	previousCount := count.Load()
+	totalTime := time.Now()
+	for {
+		<-time.After(1 * time.Second)
+		// calculate the count per second
+		currentCount := count.Load()
+		rate := float64(currentCount - previousCount)
+		previousCount = currentCount
+		// fmt.Print("\033[H\033[2J")
+		fmt.Println("Count per second: ", utils.HumanizeNumber(rate))
+		fmt.Println("Total count: ", utils.HumanizeNumber(float64(currentCount)))
+		fmt.Println("Time elapsed: ", utils.HumanizeTime(time.Since(totalTime)))
+		fmt.Println("City count: ", len(CityMap))
+
+	}
+}
+
+func readFile(publishCh chan string) {
+	file, err := os.Open(FILE)
 	if err != nil {
 		panic(err)
 	}
 	defer file.Close()
 
-	scanner := bufio.NewScanner(file)
+	reader := bufio.NewReader(file)
 
-	previousCount := count.Load()
-	totalTime := time.Now()
+	tempBuff := make([]byte, CHUNK_SIZE)
+	restBuff := make([]byte, 0)
 
-	// create a go routine that prints the count every 5 seconds
-	go func() {
-		for {
-			<-time.After(1 * time.Second)
-			// calculate the count per second
-			currentCount := count.Load()
-			rate := float64(currentCount - previousCount)
-			fmt.Println("Count per second: ", humanizeNumber(rate))
-			previousCount = currentCount
+	for {
+		n, err := reader.Read(tempBuff)
 
-			fmt.Println("Total count: ", humanizeNumber(float64(currentCount)))
-			fmt.Println("Time elapsed: ", humanizeTime(time.Since(totalTime)))
+		newBuff := append(restBuff, tempBuff[:n]...)
+		restBuff = make([]byte, 0)
+		tempBuff = make([]byte, CHUNK_SIZE)
 
+		// find the last newline character
+		lastNewline := -1
+		for i := len(newBuff) - 1; i >= 0; i-- {
+			if newBuff[i] == '\n' {
+				lastNewline = i
+				break
+			}
 		}
-	}()
+
+		// if there is no newline character, append newBuff to restBuff
+		if lastNewline == -1 {
+			if err == io.EOF {
+				publishCh <- string(newBuff)
+				break
+			}
+			restBuff = append(restBuff, newBuff...)
+			continue
+		}
+
+		lines := string(newBuff[:lastNewline+1])
+		publishCh <- lines
+		restBuff = append(restBuff, newBuff[lastNewline+1:]...)
+
+		if err != nil {
+			if err != io.EOF {
+				panic(err)
+			}
+			break
+		}
+	}
+
+}
+
+func main() {
+	go monitor()
 
 	publishCh := make(chan string)
+	wg := sync.WaitGroup{}
 
-	// create 10 workers
-	for i := 0; i < 10; i++ {
+	for i := 0; i < WORKER_COUNT; i++ {
+		wg.Add(1)
 		go func() {
 			fmt.Printf("Worker %d started\n", i)
-			for {
-				item := <-publishCh
-				processWorker(item)
+			defer wg.Done()
+			for lines := range publishCh {
+				processWorker(lines)
 			}
 		}()
 	}
 
-	for scanner.Scan() {
-		line := scanner.Text()
-		// publish the item to the workers
-		publishCh <- line
-	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		readFile(publishCh)
+		close(publishCh)
+	}()
 
-	if err := scanner.Err(); err != nil {
-		panic(err)
-	}
+	wg.Wait()
 
 	// print the result
 	for city, data := range CityMap {

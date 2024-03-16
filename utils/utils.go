@@ -40,3 +40,15 @@ func HumanizeTime(duration time.Duration) string {
 		return fmt.Sprintf("%d days %d hours", days, hours)
 	}
 }
+
+func HumanizeBytes(bytes int64) string {
+	units := []string{"B", "KB", "MB", "GB", "TB", "PB", "EB"}
+	if bytes < 1024 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	exp := int(math.Log(float64(bytes)) / math.Log(1024))
+	if exp > len(units)-1 {
+		return fmt.Sprintf("%d B", bytes)
+	}
+	return fmt.Sprintf("%.1f %s", float64(bytes)/math.Pow(1024, float64(exp)), units[exp])
+}

@@ -10,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/bpicori/1brc/utils"
@@ -27,8 +26,8 @@ const CHUNK_SIZE = 1 * 1024 * 1024 // MB
 const FILE = "./measurements.txt"
 
 var WORKER_COUNT = runtime.NumCPU()
-var count atomic.Uint64
 var mapMutex sync.Mutex
+var bytesReadCount int64
 
 var CityMap sync.Map
 
@@ -56,23 +55,25 @@ func processWorker(linesRaw *string) {
 			data.sum += temperature
 			data.count++
 		}
-		// count.Add(1)
 	}
 }
 
 func monitor() {
-	previousCount := count.Load()
 	totalTime := time.Now()
+	previousBytesReadCount := int64(0)
 	for {
 		<-time.After(1 * time.Second)
-		// calculate the count per second
-		currentCount := count.Load()
-		rate := float64(currentCount - previousCount)
-		previousCount = currentCount
-		fmt.Print("\033[H\033[2J")
-		fmt.Println("Count per second: ", utils.HumanizeNumber(rate))
-		fmt.Println("Total count: ", utils.HumanizeNumber(float64(currentCount)))
-		fmt.Println("Time elapsed: ", utils.HumanizeTime(time.Since(totalTime)))
+		fmt.Print("\033[H\033[2J") // Clear the screen
+		fmt.Println("Metrics Table")
+		fmt.Println("----------------------------------------")
+		fmt.Printf("%-25s %s\n", "Metric", "Value")
+		fmt.Println("----------------------------------------")
+		fmt.Printf("%-25s %s\n", "Bytes read:", utils.HumanizeBytes(bytesReadCount))
+		fmt.Printf("%-25s %s\n", "Bytes read per second:", utils.HumanizeBytes(bytesReadCount-previousBytesReadCount))
+		previousBytesReadCount = bytesReadCount
+		fmt.Printf("%-25s %s\n", "Time elapsed:", utils.HumanizeTime(time.Since(totalTime)))
+		fmt.Println("----------------------------------------")
+
 	}
 }
 
@@ -90,6 +91,7 @@ func readFile(publishCh chan string) {
 
 	for {
 		n, err := reader.Read(tempBuff)
+		bytesReadCount += int64(n)
 
 		newBuff := append(restBuff, tempBuff[:n]...)
 		restBuff = make([]byte, 0)
@@ -141,6 +143,8 @@ func main() {
 	// parse args
 
 	now := time.Now()
+
+	go monitor()
 
 	publishCh := make(chan string)
 	wg := sync.WaitGroup{}

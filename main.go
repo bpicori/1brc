@@ -7,7 +7,6 @@ import (
 	"math"
 	"os"
 	"runtime"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -31,6 +30,28 @@ var bytesReadCount int64
 
 var CityMap sync.Map
 
+func parseTemp(tempBytes string) float64 {
+	negative := false
+	index := 0
+	if tempBytes[index] == '-' {
+		index++
+		negative = true
+	}
+	temp := float64(tempBytes[index] - '0')
+	index++
+	if tempBytes[index] != '.' {
+		temp = temp*10 + float64(tempBytes[index]-'0')
+		index++
+	}
+	index++ // skip '.'
+	temp += float64(tempBytes[index]-'0') / 10
+	if negative {
+		temp = -temp
+	}
+
+	return temp
+}
+
 func processWorker(linesRaw *string) {
 
 	lines := strings.Split(*linesRaw, "\n")
@@ -41,10 +62,7 @@ func processWorker(linesRaw *string) {
 		}
 		res := strings.Split(line, ";")
 		city := res[0]
-		temperature, err := strconv.ParseFloat(res[1], 64)
-		if err != nil {
-			panic(err)
-		}
+		temperature := parseTemp(res[1])
 
 		v, loaded := CityMap.LoadOrStore(city, &Data{min: temperature, max: temperature, sum: temperature, count: 1})
 
@@ -139,6 +157,16 @@ func main() {
 	// 	log.Fatal("could not start CPU profile: ", err)
 	// }
 	// defer pprof.StopCPUProfile()
+
+	// memFile, err := os.Create("mem.prof")
+	// if err != nil {
+	// 	log.Fatal("could not create memory profile: ", err)
+	// }
+	// runtime.GC() // get up-to-date statistics
+	// if err := pprof.WriteHeapProfile(memFile); err != nil {
+	// 	log.Fatal("could not write memory profile: ", err)
+	// }
+	// memFile.Close()
 
 	// parse args
 

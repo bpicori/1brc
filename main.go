@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -86,12 +87,12 @@ func monitor() {
 		fmt.Println("----------------------------------------")
 		fmt.Printf("%-25s %s\n", "Metric", "Value")
 		fmt.Println("----------------------------------------")
+		fmt.Printf("%-25s %d\n", "Number of workers:", WORKER_COUNT)
 		fmt.Printf("%-25s %s\n", "Bytes read:", utils.HumanizeBytes(bytesReadCount))
 		fmt.Printf("%-25s %s\n", "Bytes read per second:", utils.HumanizeBytes(bytesReadCount-previousBytesReadCount))
 		previousBytesReadCount = bytesReadCount
 		fmt.Printf("%-25s %s\n", "Time elapsed:", utils.HumanizeTime(time.Since(totalTime)))
 		fmt.Println("----------------------------------------")
-
 	}
 }
 
@@ -148,28 +149,55 @@ func readFile(publishCh chan string) {
 
 }
 
+func saveResultsToFile(cityMap *sync.Map) error {
+	type CityData struct {
+		City string
+		Min  float64
+		Max  float64
+		Mean float64
+	}
+	now := time.Now()
+	filename := fmt.Sprintf("result-%s.txt", now.Format("20060102150405"))
+	file, err := os.Create(filename)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	var results []CityData
+
+	cityMap.Range(func(key, value interface{}) bool {
+		city := key.(string)
+		data := value.(*Data)
+		results = append(results, CityData{
+			City: city,
+			Min:  data.min,
+			Max:  data.max,
+			Mean: data.sum / float64(data.count),
+		})
+		return true // continue iteration
+	})
+
+	// Sorting the results
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].City < results[j].City
+	})
+
+	// Formatting and writing to the file
+	file.WriteString("{")
+	for _, data := range results {
+		line := fmt.Sprintf("%s=%.1f/%.1f/%.1f, ", data.City, data.Min, data.Mean, data.Max)
+		_, err = file.WriteString(line)
+		if err != nil {
+			return err
+		}
+	}
+	file.WriteString("}")
+
+	return nil
+}
+
 func main() {
-	// cpuFile, err := os.Create("cpu.prof")
-	// if err != nil {
-	// 	log.Fatal("could not create CPU profile: ", err)
-	// }
-	// if err := pprof.StartCPUProfile(cpuFile); err != nil {
-	// 	log.Fatal("could not start CPU profile: ", err)
-	// }
-	// defer pprof.StopCPUProfile()
-
-	// memFile, err := os.Create("mem.prof")
-	// if err != nil {
-	// 	log.Fatal("could not create memory profile: ", err)
-	// }
-	// runtime.GC() // get up-to-date statistics
-	// if err := pprof.WriteHeapProfile(memFile); err != nil {
-	// 	log.Fatal("could not write memory profile: ", err)
-	// }
-	// memFile.Close()
-
-	// parse args
-
 	now := time.Now()
 
 	go monitor()
@@ -197,13 +225,10 @@ func main() {
 
 	wg.Wait()
 
-	// print the result
-	CityMap.Range(func(key, value interface{}) bool {
-		city := key.(string)
-		data := value.(*Data)
-		fmt.Printf("City: %s, Min: %.2f, Max: %.2f, Mean: %.2f\n", city, data.min, data.max, data.sum/float64(data.count))
-		return true // continue iteration
-	})
+	err := saveResultsToFile(&CityMap)
+	if err != nil {
+		fmt.Println("Error saving results to file: ", err)
+	}
 
 	fmt.Println("Time elapsed: ", time.Since(now))
 

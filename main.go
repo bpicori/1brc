@@ -4,7 +4,9 @@ import (
 	"bufio"
 	"fmt"
 	"io"
+	"math"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,25 +17,24 @@ import (
 )
 
 type Data struct {
-	min  float64
-	max  float64
-	mean float64
+	min   float64
+	max   float64
+	sum   float64
+	count int
 }
 
-const CHUNK_SIZE = 16 * 1024 * 1024 // 1MB
-const WORKER_COUNT = 8
+const CHUNK_SIZE = 1 * 1024 * 1024 // MB
 const FILE = "./measurements.txt"
 
+var WORKER_COUNT = runtime.NumCPU()
 var count atomic.Uint64
 var mapMutex sync.Mutex
 
-var CityMap = make(map[string]Data)
+var CityMap sync.Map
 
-func processWorker(linesRaw string) {
-	mapMutex.Lock()
-	defer mapMutex.Unlock()
+func processWorker(linesRaw *string) {
 
-	lines := strings.Split(linesRaw, "\n")
+	lines := strings.Split(*linesRaw, "\n")
 
 	for _, line := range lines {
 		if line == "" {
@@ -46,20 +47,16 @@ func processWorker(linesRaw string) {
 			panic(err)
 		}
 
-		if _, ok := CityMap[city]; !ok {
-			CityMap[city] = Data{min: temperature, max: temperature, mean: temperature}
-		} else {
-			data := CityMap[city]
-			if temperature < data.min {
-				data.min = temperature
-			}
-			if temperature > data.max {
-				data.max = temperature
-			}
-			data.mean = (data.mean + temperature) / 2
-			CityMap[city] = data
+		v, loaded := CityMap.LoadOrStore(city, &Data{min: temperature, max: temperature, sum: temperature, count: 1})
+
+		if loaded {
+			data := v.(*Data)
+			data.min = math.Min(data.min, temperature)
+			data.max = math.Max(data.max, temperature)
+			data.sum += temperature
+			data.count++
 		}
-		count.Add(1)
+		// count.Add(1)
 	}
 }
 
@@ -72,12 +69,10 @@ func monitor() {
 		currentCount := count.Load()
 		rate := float64(currentCount - previousCount)
 		previousCount = currentCount
-		// fmt.Print("\033[H\033[2J")
+		fmt.Print("\033[H\033[2J")
 		fmt.Println("Count per second: ", utils.HumanizeNumber(rate))
 		fmt.Println("Total count: ", utils.HumanizeNumber(float64(currentCount)))
 		fmt.Println("Time elapsed: ", utils.HumanizeTime(time.Since(totalTime)))
-		fmt.Println("City count: ", len(CityMap))
-
 	}
 }
 
@@ -134,7 +129,18 @@ func readFile(publishCh chan string) {
 }
 
 func main() {
-	go monitor()
+	// cpuFile, err := os.Create("cpu.prof")
+	// if err != nil {
+	// 	log.Fatal("could not create CPU profile: ", err)
+	// }
+	// if err := pprof.StartCPUProfile(cpuFile); err != nil {
+	// 	log.Fatal("could not start CPU profile: ", err)
+	// }
+	// defer pprof.StopCPUProfile()
+
+	// parse args
+
+	now := time.Now()
 
 	publishCh := make(chan string)
 	wg := sync.WaitGroup{}
@@ -145,7 +151,7 @@ func main() {
 			fmt.Printf("Worker %d started\n", i)
 			defer wg.Done()
 			for lines := range publishCh {
-				processWorker(lines)
+				processWorker(&lines)
 			}
 		}()
 	}
@@ -160,8 +166,13 @@ func main() {
 	wg.Wait()
 
 	// print the result
-	for city, data := range CityMap {
-		fmt.Printf("City: %s, Min: %.2f, Max: %.2f, Mean: %.2f\n", city, data.min, data.max, data.mean)
-	}
+	CityMap.Range(func(key, value interface{}) bool {
+		city := key.(string)
+		data := value.(*Data)
+		fmt.Printf("City: %s, Min: %.2f, Max: %.2f, Mean: %.2f\n", city, data.min, data.max, data.sum/float64(data.count))
+		return true // continue iteration
+	})
+
+	fmt.Println("Time elapsed: ", time.Since(now))
 
 }

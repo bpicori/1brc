@@ -20,7 +20,7 @@ func HumanizeNumber(num float64) string {
 }
 
 func HumanizeTime(duration time.Duration) string {
-	if duration < time.Minute {
+	if duration < time.Minute * 2 {
 		// Less than a minute
 		return fmt.Sprintf("%d seconds", int(duration.Seconds()))
 	} else if duration < time.Hour {

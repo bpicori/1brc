@@ -9,7 +9,6 @@ import (
 	"math"
 	"os"
 	"runtime"
-	"runtime/debug"
 	"runtime/pprof"
 	"sort"
 	"sync"
@@ -295,14 +294,6 @@ func saveResultsToFile(cityMap *sync.Map) error {
 }
 
 func main() {
-	// Configure GC before any other operations
-	// Set a higher GOGC value to reduce GC frequency
-	debug.SetGCPercent(500) // Default is 100, higher means less frequent GC
-
-	// Increase memory limit to avoid GC pressure
-	// Using 90% of available system memory (adjust as needed)
-	debug.SetMemoryLimit(12 * 1024 * 1024 * 1024) // Example: ~9GB
-
 	// Add CPU profiling
 	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
 	flag.Parse()

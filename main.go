@@ -37,7 +37,7 @@ var bytesReadCount int64
 
 var CityMap sync.Map
 
-func parseTemp(tempBytes string) float64 {
+func parseTemp(tempBytes []byte) float64 {
 	negative := false
 	index := 0
 	if tempBytes[index] == '-' {
@@ -58,16 +58,16 @@ func parseTemp(tempBytes string) float64 {
 
 	return temp
 }
-func getCityAndTemp(line string) (string, string) {
+func getCityAndTemp(line []byte) ([]byte, []byte) {
 	for i := 0; i < len(line); i++ {
 		if line[i] == ';' {
 			return line[:i], line[i+1:]
 		}
 	}
-	return line, ""
+	return line, nil
 }
 
-func splitByNewline(data string, processFunc func(string)) {
+func splitByNewline(data []byte, processFunc func([]byte)) {
 	start := 0
 	for i := 0; i < len(data); i++ {
 		if data[i] == '\n' {
@@ -82,18 +82,18 @@ func splitByNewline(data string, processFunc func(string)) {
 	}
 }
 
-func mapPhase(linesRaw *string) WorkerResult {
+func mapPhase(linesRaw *[]byte) WorkerResult {
 	// Pre-allocate with expected capacity
 	localCityData := make(map[string]*Data, 1000)
-	
+
 	// Create a string-to-int map for city name deduplication
 	cityIndices := make(map[string]int, 1000)
 	cityNames := make([]string, 0, 1000)
 	cityData := make([]*Data, 0, 1000)
 	nextIndex := 0
 
-	splitByNewline(*linesRaw, func(line string) {
-		if line == "" {
+	splitByNewline(*linesRaw, func(line []byte) {
+		if line == nil {
 			return
 		}
 
@@ -101,12 +101,12 @@ func mapPhase(linesRaw *string) WorkerResult {
 		temperature := parseTemp(tempStr)
 
 		// Use the integer index instead of string key for map lookups
-		idx, exists := cityIndices[city]
+		idx, exists := cityIndices[string(city)]
 		if !exists {
 			// First time seeing this city
 			idx = nextIndex
-			cityIndices[city] = idx
-			cityNames = append(cityNames, city)
+			cityIndices[string(city)] = idx
+			cityNames = append(cityNames, string(city))
 			data := &Data{
 				min:   temperature,
 				max:   temperature,
@@ -192,7 +192,7 @@ func monitor() {
 	}
 }
 
-func readFile(publishCh chan string) {
+func readFile(publishCh chan []byte) {
 	file, err := os.Open(FILE)
 	if err != nil {
 		panic(err)
@@ -224,15 +224,14 @@ func readFile(publishCh chan string) {
 		// if there is no newline character, append newBuff to restBuff
 		if lastNewline == -1 {
 			if err == io.EOF {
-				publishCh <- string(newBuff)
+				publishCh <- newBuff
 				break
 			}
 			restBuff = append(restBuff, newBuff...)
 			continue
 		}
 
-		lines := string(newBuff[:lastNewline+1])
-		publishCh <- lines
+		publishCh <- newBuff[:lastNewline+1] // last line
 		restBuff = append(restBuff, newBuff[lastNewline+1:]...)
 
 		if err != nil {
@@ -314,7 +313,7 @@ func main() {
 
 	go monitor()
 
-	publishCh := make(chan string)
+	publishCh := make(chan []byte)
 	wg := sync.WaitGroup{}
 	resultCh := make(chan WorkerResult)
 

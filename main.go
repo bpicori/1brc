@@ -265,18 +265,19 @@ func main() {
 	// Using 90% of available system memory (adjust as needed)
 	debug.SetMemoryLimit(9 * 1024 * 1024 * 1024) // Example: ~9GB
 
-	now := time.Now()
-
+	totalStart := time.Now()
+	
 	go monitor()
-
+	
 	publishCh := make(chan string)
 	wg := sync.WaitGroup{}
 	resultCh := make(chan WorkerResult)
-
+	
+	// Start workers
+	mapStart := time.Now()
 	for i := 0; i < WORKER_COUNT; i++ {
 		wg.Add(1)
 		go func() {
-			fmt.Printf("Worker %d started\n", i)
 			defer wg.Done()
 			for lines := range publishCh {
 				result := mapPhase(&lines)
@@ -284,14 +285,18 @@ func main() {
 			}
 		}()
 	}
-
+	
+	// Start file reader
+	readStart := time.Now()
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		readFile(publishCh)
+		readDuration := time.Since(readStart)
+		fmt.Printf("File reading completed in: %s\n", readDuration)
 		close(publishCh)
 	}()
-
+	
 	// Collect results
 	var results []WorkerResult
 	go func() {
@@ -299,17 +304,35 @@ func main() {
 			results = append(results, result)
 		}
 	}()
-
+	
 	wg.Wait()
+	mapDuration := time.Since(mapStart)
+	fmt.Printf("Map phase completed in: %s\n", mapDuration)
 	close(resultCh)
-
+	
+	// Reduce phase
 	reducePhase(results)
-
+	
+	// Save results
+	saveStart := time.Now()
 	err := saveResultsToFile(&CityMap)
 	if err != nil {
 		fmt.Println("Error saving results to file: ", err)
 	}
-
-	fmt.Println("Time elapsed: ", time.Since(now))
-
+	saveDuration := time.Since(saveStart)
+	fmt.Printf("Results saved in: %s\n", saveDuration)
+	
+	// Print total time
+	totalDuration := time.Since(totalStart)
+	fmt.Println("Total execution time: ", totalDuration)
+	
+	// Print performance summary
+	fmt.Println("\nPerformance Summary:")
+	fmt.Println("----------------------------------------")
+	fmt.Printf("%-25s %s\n", "File Reading:", time.Since(readStart))
+	fmt.Printf("%-25s %s\n", "Map Phase:", mapDuration)
+	fmt.Printf("%-25s %s\n", "Reduce Phase:", time.Since(mapStart) - mapDuration)
+	fmt.Printf("%-25s %s\n", "Saving Results:", saveDuration)
+	fmt.Printf("%-25s %s\n", "Total Time:", totalDuration)
+	fmt.Println("----------------------------------------")
 }

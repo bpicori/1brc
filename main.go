@@ -23,7 +23,7 @@ type Data struct {
 	count int
 }
 
-const CHUNK_SIZE = 1 * 1024 * 1024 // MB
+const CHUNK_SIZE = 4 * 1024 * 1024 // MB
 const FILE = "./measurements.txt"
 
 var WORKER_COUNT = runtime.NumCPU()

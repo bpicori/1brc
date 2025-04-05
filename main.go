@@ -68,19 +68,23 @@ type WorkerResult struct {
 
 func mapPhase(linesRaw *string) WorkerResult {
 	lines := strings.Split(*linesRaw, "\n")
-
-	localCityData := make(map[string]*Data)
+	localCityData := make(map[string]*Data, 1000) // Pre-allocate with expected capacity
 
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		city, temp := splitLine(line)
-		temperature := parseTemp(temp)
+
+		city, tempStr := splitLine(line)
+		temperature := parseTemp(tempStr)
 
 		if data, exists := localCityData[city]; exists {
-			data.min = math.Min(data.min, temperature)
-			data.max = math.Max(data.max, temperature)
+			if temperature < data.min {
+				data.min = temperature
+			}
+			if temperature > data.max {
+				data.max = temperature
+			}
 			data.sum += temperature
 			data.count++
 		} else {

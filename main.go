@@ -56,12 +56,13 @@ func parseTemp(tempBytes string) float64 {
 func processWorker(linesRaw *string) {
 
 	lines := strings.Split(*linesRaw, "\n")
+	var res []string
 
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		res := strings.Split(line, ";")
+		res = strings.Split(line, ";")
 		city := res[0]
 		temperature := parseTemp(res[1])
 
@@ -73,6 +74,64 @@ func processWorker(linesRaw *string) {
 			data.max = math.Max(data.max, temperature)
 			data.sum += temperature
 			data.count++
+		}
+	}
+}
+
+type WorkerResult struct {
+	cityData map[string]*Data
+}
+
+func mapPhase(linesRaw *string) WorkerResult {
+	lines := strings.Split(*linesRaw, "\n")
+	var res []string
+
+	// Local map for this worker
+	localCityData := make(map[string]*Data)
+
+	for _, line := range lines {
+		if line == "" {
+			continue
+		}
+		res = strings.Split(line, ";")
+		city := res[0]
+		temperature := parseTemp(res[1])
+
+		if data, exists := localCityData[city]; exists {
+			data.min = math.Min(data.min, temperature)
+			data.max = math.Max(data.max, temperature)
+			data.sum += temperature
+			data.count++
+		} else {
+			localCityData[city] = &Data{
+				min:   temperature,
+				max:   temperature,
+				sum:   temperature,
+				count: 1,
+			}
+		}
+	}
+
+	return WorkerResult{cityData: localCityData}
+}
+
+func reducePhase(results []WorkerResult) {
+	// For each worker result
+	for _, result := range results {
+		// For each city in the worker's local map
+		for city, data := range result.cityData {
+			v, loaded := CityMap.LoadOrStore(city, data)
+			if loaded {
+				// City already exists in global map, merge the data
+				globalData := v.(*Data)
+				mapMutex.Lock()
+				globalData.min = math.Min(globalData.min, data.min)
+				globalData.max = math.Max(globalData.max, data.max)
+				globalData.sum += data.sum
+				globalData.count += data.count
+				mapMutex.Unlock()
+			}
+			// If not loaded, the worker's data was stored directly
 		}
 	}
 }
@@ -204,6 +263,7 @@ func main() {
 
 	publishCh := make(chan string)
 	wg := sync.WaitGroup{}
+	resultCh := make(chan WorkerResult)
 
 	for i := 0; i < WORKER_COUNT; i++ {
 		wg.Add(1)
@@ -211,7 +271,8 @@ func main() {
 			fmt.Printf("Worker %d started\n", i)
 			defer wg.Done()
 			for lines := range publishCh {
-				processWorker(&lines)
+				result := mapPhase(&lines)
+				resultCh <- result
 			}
 		}()
 	}
@@ -223,7 +284,18 @@ func main() {
 		close(publishCh)
 	}()
 
+	// Collect results
+	var results []WorkerResult
+	go func() {
+		for result := range resultCh {
+			results = append(results, result)
+		}
+	}()
+
 	wg.Wait()
+	close(resultCh)
+
+	reducePhase(results)
 
 	err := saveResultsToFile(&CityMap)
 	if err != nil {

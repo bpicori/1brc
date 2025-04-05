@@ -84,7 +84,14 @@ func splitByNewline(data string, processFunc func(string)) {
 }
 
 func mapPhase(linesRaw *string) WorkerResult {
+	// Pre-allocate with expected capacity
 	localCityData := make(map[string]*Data, 1000)
+	
+	// Create a string-to-int map for city name deduplication
+	cityIndices := make(map[string]int, 1000)
+	cityNames := make([]string, 0, 1000)
+	cityData := make([]*Data, 0, 1000)
+	nextIndex := 0
 
 	splitByNewline(*linesRaw, func(line string) {
 		if line == "" {
@@ -94,7 +101,24 @@ func mapPhase(linesRaw *string) WorkerResult {
 		city, tempStr := getCityAndTemp(line)
 		temperature := parseTemp(tempStr)
 
-		if data, exists := localCityData[city]; exists {
+		// Use the integer index instead of string key for map lookups
+		idx, exists := cityIndices[city]
+		if !exists {
+			// First time seeing this city
+			idx = nextIndex
+			cityIndices[city] = idx
+			cityNames = append(cityNames, city)
+			data := &Data{
+				min:   temperature,
+				max:   temperature,
+				sum:   temperature,
+				count: 1,
+			}
+			cityData = append(cityData, data)
+			nextIndex++
+		} else {
+			// City exists, update its data
+			data := cityData[idx]
 			if temperature < data.min {
 				data.min = temperature
 			}
@@ -103,15 +127,13 @@ func mapPhase(linesRaw *string) WorkerResult {
 			}
 			data.sum += temperature
 			data.count++
-		} else {
-			localCityData[city] = &Data{
-				min:   temperature,
-				max:   temperature,
-				sum:   temperature,
-				count: 1,
-			}
 		}
 	})
+
+	// Convert back to the expected map format for the result
+	for i, name := range cityNames {
+		localCityData[name] = cityData[i]
+	}
 
 	return WorkerResult{cityData: localCityData}
 }

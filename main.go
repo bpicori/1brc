@@ -53,30 +53,13 @@ func parseTemp(tempBytes string) float64 {
 
 	return temp
 }
-
-func processWorker(linesRaw *string) {
-
-	lines := strings.Split(*linesRaw, "\n")
-	var res []string
-
-	for _, line := range lines {
-		if line == "" {
-			continue
-		}
-		res = strings.Split(line, ";")
-		city := res[0]
-		temperature := parseTemp(res[1])
-
-		v, loaded := CityMap.LoadOrStore(city, &Data{min: temperature, max: temperature, sum: temperature, count: 1})
-
-		if loaded {
-			data := v.(*Data)
-			data.min = math.Min(data.min, temperature)
-			data.max = math.Max(data.max, temperature)
-			data.sum += temperature
-			data.count++
+func splitLine(line string) (string, string) {
+	for i := 0; i < len(line); i++ {
+		if line[i] == ';' {
+			return line[:i], line[i+1:]
 		}
 	}
+	return line, ""
 }
 
 type WorkerResult struct {
@@ -85,18 +68,15 @@ type WorkerResult struct {
 
 func mapPhase(linesRaw *string) WorkerResult {
 	lines := strings.Split(*linesRaw, "\n")
-	var res []string
 
-	// Local map for this worker
 	localCityData := make(map[string]*Data)
 
 	for _, line := range lines {
 		if line == "" {
 			continue
 		}
-		res = strings.Split(line, ";")
-		city := res[0]
-		temperature := parseTemp(res[1])
+		city, temp := splitLine(line)
+		temperature := parseTemp(temp)
 
 		if data, exists := localCityData[city]; exists {
 			data.min = math.Min(data.min, temperature)
@@ -141,13 +121,13 @@ func monitor() {
 	totalTime := time.Now()
 	previousBytesReadCount := int64(0)
 	var m runtime.MemStats
-	
+
 	for {
 		<-time.After(1 * time.Second)
-		
+
 		// Get current memory stats
 		runtime.ReadMemStats(&m)
-		
+
 		fmt.Print("\033[H\033[2J") // Clear the screen
 		fmt.Println("Metrics Table")
 		fmt.Println("----------------------------------------")
@@ -158,7 +138,7 @@ func monitor() {
 		fmt.Printf("%-25s %s\n", "Bytes read per second:", utils.HumanizeBytes(bytesReadCount-previousBytesReadCount))
 		previousBytesReadCount = bytesReadCount
 		fmt.Printf("%-25s %s\n", "Time elapsed:", utils.HumanizeTime(time.Since(totalTime)))
-		
+
 		// Memory usage metrics
 		fmt.Println("----------------------------------------")
 		fmt.Printf("%-25s %s\n", "Heap in use:", utils.HumanizeBytes(int64(m.HeapInuse)))
@@ -276,11 +256,11 @@ func main() {
 	// Configure GC before any other operations
 	// Set a higher GOGC value to reduce GC frequency
 	debug.SetGCPercent(500) // Default is 100, higher means less frequent GC
-	
+
 	// Increase memory limit to avoid GC pressure
 	// Using 90% of available system memory (adjust as needed)
 	debug.SetMemoryLimit(9 * 1024 * 1024 * 1024) // Example: ~9GB
-	
+
 	now := time.Now()
 
 	go monitor()

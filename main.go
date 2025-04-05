@@ -2,14 +2,16 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"io"
+	"log"
 	"math"
 	"os"
 	"runtime"
 	"runtime/debug"
+	"runtime/pprof"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
@@ -21,6 +23,10 @@ type Data struct {
 	max   float64
 	sum   float64
 	count int
+}
+
+type WorkerResult struct {
+	cityData map[string]*Data
 }
 
 const CHUNK_SIZE = 4 * 1024 * 1024 // MB
@@ -53,7 +59,7 @@ func parseTemp(tempBytes string) float64 {
 
 	return temp
 }
-func splitLine(line string) (string, string) {
+func getCityAndTemp(line string) (string, string) {
 	for i := 0; i < len(line); i++ {
 		if line[i] == ';' {
 			return line[:i], line[i+1:]
@@ -62,20 +68,30 @@ func splitLine(line string) (string, string) {
 	return line, ""
 }
 
-type WorkerResult struct {
-	cityData map[string]*Data
+func splitByNewline(data string, processFunc func(string)) {
+	start := 0
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\n' {
+			processFunc(data[start:i])
+			start = i + 1
+		}
+	}
+
+	// Handle the last line if there's no final newline
+	if start < len(data) {
+		processFunc(data[start:])
+	}
 }
 
 func mapPhase(linesRaw *string) WorkerResult {
-	lines := strings.Split(*linesRaw, "\n")
-	localCityData := make(map[string]*Data, 1000) // Pre-allocate with expected capacity
+	localCityData := make(map[string]*Data, 1000)
 
-	for _, line := range lines {
+	splitByNewline(*linesRaw, func(line string) {
 		if line == "" {
-			continue
+			return
 		}
 
-		city, tempStr := splitLine(line)
+		city, tempStr := getCityAndTemp(line)
 		temperature := parseTemp(tempStr)
 
 		if data, exists := localCityData[city]; exists {
@@ -95,7 +111,7 @@ func mapPhase(linesRaw *string) WorkerResult {
 				count: 1,
 			}
 		}
-	}
+	})
 
 	return WorkerResult{cityData: localCityData}
 }
@@ -263,16 +279,32 @@ func main() {
 
 	// Increase memory limit to avoid GC pressure
 	// Using 90% of available system memory (adjust as needed)
-	debug.SetMemoryLimit(9 * 1024 * 1024 * 1024) // Example: ~9GB
+	debug.SetMemoryLimit(12 * 1024 * 1024 * 1024) // Example: ~9GB
+
+	// Add CPU profiling
+	cpuprofile := flag.String("cpuprofile", "", "write cpu profile to file")
+	flag.Parse()
+
+	if *cpuprofile != "" {
+		f, err := os.Create(*cpuprofile)
+		if err != nil {
+			log.Fatal("could not create CPU profile: ", err)
+		}
+		defer f.Close()
+		if err := pprof.StartCPUProfile(f); err != nil {
+			log.Fatal("could not start CPU profile: ", err)
+		}
+		defer pprof.StopCPUProfile()
+	}
 
 	totalStart := time.Now()
-	
+
 	go monitor()
-	
+
 	publishCh := make(chan string)
 	wg := sync.WaitGroup{}
 	resultCh := make(chan WorkerResult)
-	
+
 	// Start workers
 	mapStart := time.Now()
 	for i := 0; i < WORKER_COUNT; i++ {
@@ -285,7 +317,7 @@ func main() {
 			}
 		}()
 	}
-	
+
 	// Start file reader
 	readStart := time.Now()
 	wg.Add(1)
@@ -296,7 +328,7 @@ func main() {
 		fmt.Printf("File reading completed in: %s\n", readDuration)
 		close(publishCh)
 	}()
-	
+
 	// Collect results
 	var results []WorkerResult
 	go func() {
@@ -304,15 +336,15 @@ func main() {
 			results = append(results, result)
 		}
 	}()
-	
+
 	wg.Wait()
 	mapDuration := time.Since(mapStart)
 	fmt.Printf("Map phase completed in: %s\n", mapDuration)
 	close(resultCh)
-	
+
 	// Reduce phase
 	reducePhase(results)
-	
+
 	// Save results
 	saveStart := time.Now()
 	err := saveResultsToFile(&CityMap)
@@ -321,17 +353,17 @@ func main() {
 	}
 	saveDuration := time.Since(saveStart)
 	fmt.Printf("Results saved in: %s\n", saveDuration)
-	
+
 	// Print total time
 	totalDuration := time.Since(totalStart)
 	fmt.Println("Total execution time: ", totalDuration)
-	
+
 	// Print performance summary
 	fmt.Println("\nPerformance Summary:")
 	fmt.Println("----------------------------------------")
 	fmt.Printf("%-25s %s\n", "File Reading:", time.Since(readStart))
 	fmt.Printf("%-25s %s\n", "Map Phase:", mapDuration)
-	fmt.Printf("%-25s %s\n", "Reduce Phase:", time.Since(mapStart) - mapDuration)
+	fmt.Printf("%-25s %s\n", "Reduce Phase:", time.Since(mapStart)-mapDuration)
 	fmt.Printf("%-25s %s\n", "Saving Results:", saveDuration)
 	fmt.Printf("%-25s %s\n", "Total Time:", totalDuration)
 	fmt.Println("----------------------------------------")

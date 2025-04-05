@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -139,8 +140,14 @@ func reducePhase(results []WorkerResult) {
 func monitor() {
 	totalTime := time.Now()
 	previousBytesReadCount := int64(0)
+	var m runtime.MemStats
+	
 	for {
 		<-time.After(1 * time.Second)
+		
+		// Get current memory stats
+		runtime.ReadMemStats(&m)
+		
 		fmt.Print("\033[H\033[2J") // Clear the screen
 		fmt.Println("Metrics Table")
 		fmt.Println("----------------------------------------")
@@ -151,6 +158,15 @@ func monitor() {
 		fmt.Printf("%-25s %s\n", "Bytes read per second:", utils.HumanizeBytes(bytesReadCount-previousBytesReadCount))
 		previousBytesReadCount = bytesReadCount
 		fmt.Printf("%-25s %s\n", "Time elapsed:", utils.HumanizeTime(time.Since(totalTime)))
+		
+		// Memory usage metrics
+		fmt.Println("----------------------------------------")
+		fmt.Printf("%-25s %s\n", "Heap in use:", utils.HumanizeBytes(int64(m.HeapInuse)))
+		fmt.Printf("%-25s %s\n", "Stack in use:", utils.HumanizeBytes(int64(m.StackInuse)))
+		fmt.Printf("%-25s %s\n", "Total alloc (cumulative):", utils.HumanizeBytes(int64(m.TotalAlloc)))
+		fmt.Printf("%-25s %s\n", "Sys memory:", utils.HumanizeBytes(int64(m.Sys)))
+		fmt.Printf("%-25s %d\n", "GC cycles:", m.NumGC)
+		fmt.Printf("%-25s %s\n", "GC CPU fraction:", fmt.Sprintf("%.2f%%", m.GCCPUFraction*100))
 		fmt.Println("----------------------------------------")
 	}
 }
@@ -257,6 +273,14 @@ func saveResultsToFile(cityMap *sync.Map) error {
 }
 
 func main() {
+	// Configure GC before any other operations
+	// Set a higher GOGC value to reduce GC frequency
+	debug.SetGCPercent(500) // Default is 100, higher means less frequent GC
+	
+	// Increase memory limit to avoid GC pressure
+	// Using 90% of available system memory (adjust as needed)
+	debug.SetMemoryLimit(9 * 1024 * 1024 * 1024) // Example: ~9GB
+	
 	now := time.Now()
 
 	go monitor()

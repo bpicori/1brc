@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/bpicori/1brc/utils"
+	"github.com/bpicori/1brc/monitor"
 )
 
 type Data struct {
@@ -151,40 +151,6 @@ func reducePhase(workerResults []WorkerResult) {
 	}
 }
 
-func monitor() {
-	totalTime := time.Now()
-	previousBytesReadCount := int64(0)
-	var m runtime.MemStats
-
-	for {
-		<-time.After(1 * time.Second)
-
-		// Get current memory stats
-		runtime.ReadMemStats(&m)
-
-		fmt.Print("\033[H\033[2J") // Clear the screen
-		fmt.Println("Metrics Table")
-		fmt.Println("----------------------------------------")
-		fmt.Printf("%-25s %s\n", "Metric", "Value")
-		fmt.Println("----------------------------------------")
-		fmt.Printf("%-25s %d\n", "Number of workers:", WORKER_COUNT)
-		fmt.Printf("%-25s %s\n", "Bytes read:", utils.HumanizeBytes(bytesReadCount))
-		fmt.Printf("%-25s %s\n", "Bytes read per second:", utils.HumanizeBytes(bytesReadCount-previousBytesReadCount))
-		previousBytesReadCount = bytesReadCount
-		fmt.Printf("%-25s %s\n", "Time elapsed:", utils.HumanizeTime(time.Since(totalTime)))
-
-		// Memory usage metrics
-		fmt.Println("----------------------------------------")
-		fmt.Printf("%-25s %s\n", "Heap in use:", utils.HumanizeBytes(int64(m.HeapInuse)))
-		fmt.Printf("%-25s %s\n", "Stack in use:", utils.HumanizeBytes(int64(m.StackInuse)))
-		fmt.Printf("%-25s %s\n", "Total alloc (cumulative):", utils.HumanizeBytes(int64(m.TotalAlloc)))
-		fmt.Printf("%-25s %s\n", "Sys memory:", utils.HumanizeBytes(int64(m.Sys)))
-		fmt.Printf("%-25s %d\n", "GC cycles:", m.NumGC)
-		fmt.Printf("%-25s %s\n", "GC CPU fraction:", fmt.Sprintf("%.2f%%", m.GCCPUFraction*100))
-		fmt.Println("----------------------------------------")
-	}
-}
-
 func readFile(publishCh chan []byte) {
 	file, err := os.Open(FILE)
 	if err != nil {
@@ -199,7 +165,7 @@ func readFile(publishCh chan []byte) {
 
 	for {
 		n, err := reader.Read(tempBuff)
-		bytesReadCount += int64(n)
+		monitor.UpdateBytesRead(n) 
 
 		newBuff := append(restBuff, tempBuff[:n]...)
 		restBuff = make([]byte, 0)
@@ -234,7 +200,6 @@ func readFile(publishCh chan []byte) {
 			break
 		}
 	}
-
 }
 
 func saveResultsToFile(cityMap *map[string]*Data) error {
@@ -303,8 +268,10 @@ func main() {
 	CityMap = make(map[string]*Data)
 
 	totalStart := time.Now()
-
-	go monitor()
+	
+	// Initialize and start monitor
+	monitor.Initialize()
+	go monitor.Start(WORKER_COUNT)
 
 	publishCh := make(chan []byte)
 	wg := sync.WaitGroup{}

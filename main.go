@@ -32,10 +32,8 @@ const CHUNK_SIZE = 4 * 1024 * 1024 // MB
 const FILE = "./measurements.txt"
 
 var WORKER_COUNT = runtime.NumCPU()
-var mapMutex sync.Mutex
 var bytesReadCount int64
-
-var CityMap sync.Map
+var CityMap map[string]*Data
 
 func parseTemp(tempBytes []byte) float64 {
 	negative := false
@@ -137,23 +135,18 @@ func mapPhase(linesRaw *[]byte) WorkerResult {
 	return WorkerResult{cityData: localCityData}
 }
 
-func reducePhase(results []WorkerResult) {
-	// For each worker result
-	for _, result := range results {
-		// For each city in the worker's local map
+func reducePhase(workerResults []WorkerResult) {
+	for _, result := range workerResults {
 		for city, data := range result.cityData {
-			v, loaded := CityMap.LoadOrStore(city, data)
-			if loaded {
-				// City already exists in global map, merge the data
-				globalData := v.(*Data)
-				mapMutex.Lock()
+			globalData, exists := CityMap[city]
+			if !exists {
+				CityMap[city] = data
+			} else {
 				globalData.min = math.Min(globalData.min, data.min)
 				globalData.max = math.Max(globalData.max, data.max)
 				globalData.sum += data.sum
 				globalData.count += data.count
-				mapMutex.Unlock()
 			}
-			// If not loaded, the worker's data was stored directly
 		}
 	}
 }
@@ -244,7 +237,7 @@ func readFile(publishCh chan []byte) {
 
 }
 
-func saveResultsToFile(cityMap *sync.Map) error {
+func saveResultsToFile(cityMap *map[string]*Data) error {
 	type CityData struct {
 		City string
 		Min  float64
@@ -261,17 +254,14 @@ func saveResultsToFile(cityMap *sync.Map) error {
 
 	var results []CityData
 
-	cityMap.Range(func(key, value interface{}) bool {
-		city := key.(string)
-		data := value.(*Data)
+	for city, data := range *cityMap {
 		results = append(results, CityData{
 			City: city,
 			Min:  data.min,
 			Max:  data.max,
 			Mean: data.sum / float64(data.count),
 		})
-		return true // continue iteration
-	})
+	}
 
 	// Sorting the results
 	sort.Slice(results, func(i, j int) bool {
@@ -308,6 +298,9 @@ func main() {
 		}
 		defer pprof.StopCPUProfile()
 	}
+
+	// Initialize CityMap
+	CityMap = make(map[string]*Data)
 
 	totalStart := time.Now()
 
